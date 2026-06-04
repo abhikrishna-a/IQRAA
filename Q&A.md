@@ -3,165 +3,176 @@
 
 ---
 
-## SECTION C — Scalability & Problem Solving (20 Marks)
+## SECTION C — Scalability & Problem Solving
 
-**Scenario:** 1,000 internships published. Within 1 hour, 50,000 students apply.
-
----
-
-### 1. How will your system handle this traffic?
-
-- Deploy Django behind a **load balancer** (AWS ALB / Nginx) to distribute requests across multiple app servers
-- Use **auto-scaling groups** to spin up new instances when CPU/memory thresholds are crossed
-- Configure **gunicorn** with `workers = (2 × CPU cores) + 1` per instance
-- Put a **CDN** (CloudFront) in front of static assets to offload the origin server
-- Use **PgBouncer** for database connection pooling so the DB isn't overwhelmed
+**Scenario:** 1,000 internships go live. Within an hour, 50,000 students start applying.
 
 ---
 
-### 2. What indexes will you create?
+### 1. How would your system handle this traffic?
 
-These indexes speed up the most common high-load queries:
+First off, a single Django server isn't going to cut it with 50k users hitting us at once. Here's what I'd do:
 
-| Index | Purpose | Status in project |
+- Put a **load balancer** (AWS ALB or Nginx) in front so traffic gets spread across multiple app servers instead of hammering one box
+- Set up **auto-scaling** so when CPU or memory spikes, new instances spin up automatically without me having to wake up at 3 AM
+- Tune **gunicorn** with `workers = (2 × CPU cores) + 1` per server — that's the sweet spot for Django
+- Offload static assets to a **CDN** (CloudFront) so Django isn't wasting time serving files it shouldn't be serving
+- Use **PgBouncer** for connection pooling — without it, 50k connections would kill PostgreSQL instantly
+
+---
+
+### 2. What indexes would you add?
+
+Indexes are cheap to create and make a huge difference. Here's what I'd put in place:
+
+| Index | Why | Already there? |
 |---|---|---|
-| `applications(student_id, internship_id)` | Covers duplicate-check lookups | ✅ Already enforced via `unique_together` |
-| `applications(internship_id)` | Companies fetching applications for an internship | ❌ Would add |
-| `applications(student_id)` | Students listing their own applications | ❌ Would add |
-| `internships(status)` | Filtering open/closed listings | ❌ Would add |
-| `internships(company_id)` | Company-scoped internship queries | ❌ Would add |
-| `users(email)` | Fast login lookups | ✅ Already added |
+| `users(email)` | Login looks up by email — without this, every login scans the whole user table | ✅ Yes |
+| `applications(student, internship)` | Covers the duplicate check — and it's already enforced by `unique_together` | ✅ Yes |
+| `applications(internship_id)` | Companies need to see who applied to their posting | ❌ Would add |
+| `applications(student_id)` | Students checking their own application history | ❌ Would add |
+| `internships(status)` | Filtering by open/closed is a common query | ❌ Would add |
+| `internships(company_id)` | Companies viewing their own listings | ❌ Would add |
 
 ---
 
-### 3. How will you keep response time below 500ms?
+### 3. How would you keep response times under 500ms?
 
-- Use `select_related()` / `prefetch_related()` on all FK/M2M views to **eliminate N+1 queries** (already done)
-- **Cache** the internship listing (most-read endpoint) in **Redis** with a 30–60 second TTL — no need to hit the DB 50,000 times/hour
-- Use **database read replicas** — route SELECTs to replicas, primary only handles writes
-- **Paginate** all list endpoints (already done — `page` + `limit` params)
-- Use **Django Debug Toolbar** in development to profile slow queries before they reach production
-- Set **database query timeouts** to prevent long-running queries from blocking the connection pool
+A few things I've already done, and a few I'd add:
 
----
+**Already in place:**
+- `select_related()` on every FK query — no N+1 problems here
+- Pagination with `page` and `limit` params — no endpoint dumps unlimited rows
 
-### 4. How will you prevent duplicate applications?
-
-Two layers of defense (already implemented):
-
-1. **Database constraint** — `unique_together = ('student', 'internship')` on the Application model. The DB enforces uniqueness even under race conditions.
-2. **Application-level pre-check** — The view runs `Application.objects.filter(student=user, internship_id=id).exists()` before inserting, returning `409 Conflict` early.
-
-Under high concurrency, the DB constraint is the final safety net. If two requests pass the pre-check simultaneously, the second insert hits `IntegrityError`, which is caught and returned as `409`.
+**Would add:**
+- **Redis cache** for the internship listing endpoint. It's the most-read endpoint by far. Cache it for 30-60 seconds. Serving 50k requests from Redis instead of PostgreSQL is night and day
+- **Read replicas** — route all SELECT queries to a replica so the primary database only handles writes
+- **Django Debug Toolbar** during development to catch slow queries before they hit production
+- **Query timeouts** so one bad query doesn't hog the connection pool and take everything down with it
 
 ---
 
-### 5. Will you use Redis? How?
+### 4. How would you prevent duplicate applications?
 
-Yes. Currently not implemented; would add Redis for:
+I've got two layers of protection here — belt and suspenders approach:
 
-| Role | What it would do |
+1. **In the view:** Before inserting, I check `Application.objects.filter(student=user, internship_id=id).exists()`. If it exists, return `409 Conflict` immediately. This saves a wasted DB insert attempt.
+
+2. **In the database:** `unique_together = ('student', 'internship')` on the Application model. This is the real safety net. Even if two requests slip past the pre-check at the exact same millisecond, the database itself will reject the duplicate and throw an `IntegrityError`, which I catch and return as `409`.
+
+Under real high concurrency, the DB constraint is the only thing you can truly trust — two concurrent requests can both pass the pre-check before either one commits.
+
+---
+
+### 5. Would you use Redis?
+
+Absolutely. Right now the project doesn't use Redis, but here's exactly where I'd plug it in:
+
+| Where | What it'd do |
 |---|---|
-| **Cache Layer** | Cache paginated internship listings. Key: `internships:page:{n}:limit:{l}`. TTL: 30–60s. Invalidate on create/update/delete |
-| **Rate Limiting** | Replace the current in-memory `RATE_LIMIT` dict (per-process, resets on restart) with Redis-backed counters — works across all server instances |
-| **Session Store** | Use Redis as the Django session backend |
-| **Queue Broker** | Use Redis as the Celery message broker for background tasks |
+| **Cache layer** | Cache internship listings with keys like `internships:page:1:limit:10`. Invalidate whenever someone creates/updates/deletes an internship. TTL of 30-60 seconds |
+| **Rate limiting** | Replace the current in-memory `RATE_LIMIT` dict with Redis counters. The dict works fine for one server, but breaks with multiple workers — Redis works everywhere |
+| **Session store** | Django session backend pointing to Redis instead of the database |
+| **Queue broker** | Celery uses Redis as its message broker for background tasks |
 
 ---
 
-### 6. Will you use Queue Systems (RabbitMQ / Kafka)?
+### 6. Would you use queue systems (RabbitMQ / Kafka)?
 
-Yes — **Celery with Redis** (or RabbitMQ) as the broker. The API responds immediately, and background tasks handle the rest:
+Yes — **Celery with Redis** as the broker. The API should respond fast and let background workers handle the slow stuff:
 
-- **Confirmation email** — sent after a student applies (API returns 201 right away)
-- **Status change notification** — notify the student via email/push when a company accepts/rejects
-- **Resume virus scan** — upload accepted, scan queued in background
+- **Confirmation emails:** Student applies → API returns 201 instantly → Celery sends the email in the background
+- **Status change notifications:** Company updates status → Celery notifies the student
+- **Resume scanning:** Upload accepted → queue a background virus scan
 
-Kafka would be considered if the platform later needs event streaming (analytics, audit logs). For this scale, Celery + Redis is sufficient.
+If the platform grows and needs event streaming (analytics pipelines, audit trails), I'd look at Kafka. But for this scale? Celery + Redis does the job without overcomplicating things.
 
 ---
 
-### 7. How will you scale the system?
+### 7. How would you scale the system long-term?
 
-| Layer | Strategy |
+| Area | Approach |
 |---|---|
-| **Application** | Horizontal scaling — stateless JWT auth means any instance handles any request. Docker + Kubernetes for orchestration |
-| **Database** | Read replicas for SELECT workloads. Shard by `company_id` if data grows beyond 100M+ rows |
-| **Media** | Serve resumes/images from S3 + CloudFront, not through Django |
-| **Architecture** | Split into microservices (auth, internships, applications) if team size requires it |
-| **Monitoring** | Prometheus + Grafana for metrics, Sentry for errors, structured JSON logs to ELK/CloudWatch |
+| **App servers** | Horizontal scaling all the way. JWT is stateless so any instance handles any request. Containerize with Docker and orchestrate with Kubernetes |
+| **Database** | Read replicas first. If the data crosses 100M+ rows, consider sharding by `company_id` |
+| **File storage** | Move media uploads (resumes, profile pics, logos) to S3 + CloudFront. Django shouldn't be serving files |
+| **Architecture** | Keep it as a monolith until the team grows. Split into microservices (auth, internships, applications) only when the deployment cadence demands it |
+| **Monitoring** | Prometheus + Grafana for metrics, Sentry for error tracking, structured JSON logs shipped to ELK or CloudWatch |
 
 ---
 
-## SECTION D — Query Optimization (10 Marks)
+## SECTION D — Query Optimization
 
-**Given query:**
-```
+**The problem query:**
+```sql
 SELECT * FROM applications WHERE internship_id = 100 ORDER BY created_at DESC;
 ```
-**Table size:** 10 million+ records
+**Table size:** 10 million+ rows
 
 ---
 
-### 1. Why is the query slow?
+### 1. Why is it slow?
 
-| Problem | Explanation |
+There are four things working against this query:
+
+| Problem | What's happening |
 |---|---|
-| **Full table scan** | No index on `internship_id` — PostgreSQL reads all 10M+ rows |
-| **No index on ORDER BY** | Sorting 10M rows by `created_at` requires an expensive filesort (O(n log n)) |
-| **SELECT \*** | Fetches all columns — more I/O and network overhead |
-| **No LIMIT** | The DB must return every matching row instead of a page |
+| **Full table scan** | No index on `internship_id` means PostgreSQL has to read all 10 million rows one by one |
+| **No sort index** | ORDER BY `created_at` without an index forces PostgreSQL to do an in-memory sort of the entire result set |
+| **SELECT \*** | It's fetching every single column when maybe you only need 3-4 of them |
+| **No LIMIT** | The database has to return every matching row instead of just a page |
 
 ---
 
-### 2. How do you optimize it?
+### 2. How would you fix it?
 
 **Step 1 — Add a composite index:**
 ```sql
 CREATE INDEX idx_app_internship_created ON applications (internship_id, created_at DESC);
 ```
-This covers both the `WHERE` filter and the `ORDER BY` sort in a single index scan.
+This is the big one. A single index that covers both the `WHERE` filter and the `ORDER BY`. PostgreSQL can satisfy the entire query just by scanning the index without touching the table at all (Index Only Scan).
 
-**Step 2 — Select only the columns you need:**
+**Step 2 — Only ask for what you need:**
 ```sql
-SELECT id, student_id, cover_letter, status, resume, created_at
+SELECT id, student_id, status, created_at
 FROM applications
 WHERE internship_id = 100
 ORDER BY created_at DESC
 LIMIT 20 OFFSET 0;
 ```
+Less columns = less I/O = faster response.
 
-**Step 3 — Paginate everything.** Never return all results at once. For deep pages, use cursor-based pagination (keyset pagination using the last `created_at` value) instead of `OFFSET`, which gets slower on deep pages.
+**Step 3 — Always paginate.** Never return all results. For deep pages, use cursor-based pagination (keyset pagination using the last `created_at` value) instead of `OFFSET` — `OFFSET` gets progressively slower the deeper you go.
 
 **Step 4 — In Django ORM:**
 ```python
 Application.objects.filter(internship_id=100) \
-    .only('id', 'student_id', 'cover_letter', 'status', 'resume', 'created_at') \
+    .only('id', 'student_id', 'status', 'created_at') \
     .order_by('-created_at')[:20]
 ```
 
 ---
 
-### 3. What indexes will you create?
+### 3. Which indexes specifically?
 
-| Index | Purpose |
+| Index | What it's for |
 |---|---|
-| `(internship_id, created_at DESC)` | Primary — covers WHERE filter + ORDER BY in one index |
-| `(student_id)` | Speeds up student's own application list view |
-| `(student_id, internship_id)` | Already exists as `unique_together`, covers duplicate checks |
-| Partial: `(internship_id) WHERE status = 'pending'` | Smaller, faster index if companies frequently filter pending apps |
+| `(internship_id, created_at DESC)` | Covers both the WHERE filter and the ORDER BY in one index |
+| `(student_id)` | Speed up "my applications" page for students |
+| `(student_id, internship_id)` | Already exists — covers the duplicate check |
+| Partial: `(internship_id) WHERE status = 'pending'` | If companies frequently filter by pending status, this smaller index is faster than a full index |
 
 ---
 
-### 4. How will you measure performance improvement?
+### 4. How would you verify the improvement?
 
-| Tool | What to look for |
+| Method | What to check |
 |---|---|
-| **EXPLAIN ANALYZE** | Before: `Seq Scan` (scans all rows). After: `Index Only Scan` (scans just the index). Rows scanned drops from millions to near zero |
-| **pg_stat_statements / pgBadger** | Monitor slow query logs in production for regressions |
-| **locust / k6** | Load test with 50,000 concurrent users, measure p95/p99 latency before and after the index |
-| **Django Silk / Debug Toolbar** | Profile ORM queries in development — catch N+1 patterns early |
-| **APM tools (New Relic / Datadog)** | End-to-end latency traces showing exactly which DB call is the bottleneck |
+| **EXPLAIN ANALYZE** | Run before and after. Look for `Seq Scan` (bad) changing to `Index Only Scan` (good). Row count should drop from millions to near zero |
+| **pg_stat_statements** | Track slow query regressions in production |
+| **locust / k6** | Simulate 50k concurrent users, measure p95/p99 latency before and after adding the index |
+| **Django Debug Toolbar / Silk** | Profile queries during development |
+| **New Relic / Datadog** | End-to-end APM traces — shows exactly which DB call is the bottleneck |
 
 ---
 
