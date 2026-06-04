@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -12,7 +13,10 @@ from .serializers import RegisterSerializer, LoginSerializer, ProfileSerializer
 def register(request):
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    user = serializer.save()
+    try:
+        user = serializer.save()
+    except IntegrityError:
+        return Response({'error': 'User with this email already exists'}, status=status.HTTP_409_CONFLICT)
     return Response({
         'id': user.id,
         'username': user.username,
@@ -26,7 +30,10 @@ def register(request):
 def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    user = serializer.validated_data['user']
+    try:
+        user = serializer.validated_data['user']
+    except KeyError:
+        return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
     refresh = RefreshToken.for_user(user)
     return Response({
         'access': str(refresh.access_token),
@@ -47,7 +54,11 @@ def profile(request):
     if request.method == 'GET':
         serializer = ProfileSerializer(user)
         return Response(serializer.data)
+
     serializer = ProfileSerializer(user, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
-    serializer.save()
+    try:
+        serializer.save()
+    except Exception:
+        return Response({'error': 'Profile update failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return Response(serializer.data)
