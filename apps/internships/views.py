@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -6,6 +8,23 @@ from rest_framework.response import Response
 from .models import Company, Internship
 from .serializers import CompanySerializer, InternshipSerializer
 from .permissions import IsCompanyUser, IsOwner
+
+RATE_LIMIT = {}
+RATE_LIMIT_MAX = 100
+RATE_LIMIT_WINDOW = 900  # 15 minutes
+
+
+def check_rate_limit(request):
+    key = request.META.get('REMOTE_ADDR', 'unknown')
+    now = datetime.now().timestamp()
+    window_start = now - RATE_LIMIT_WINDOW
+    if key not in RATE_LIMIT:
+        RATE_LIMIT[key] = []
+    RATE_LIMIT[key] = [t for t in RATE_LIMIT[key] if t > window_start]
+    if len(RATE_LIMIT[key]) >= RATE_LIMIT_MAX:
+        return False
+    RATE_LIMIT[key].append(now)
+    return True
 
 # ── Companies ──
 
@@ -55,6 +74,9 @@ def internship_list(request):
         serializer.save(company=request.user.company)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    if not check_rate_limit(request):
+        return Response({'error': 'Rate limit exceeded. Try again later.'}, status=429)
+
     qs = Internship.objects.all()
     search = request.query_params.get('search')
     if search:
@@ -74,8 +96,22 @@ def internship_list(request):
     company_id = request.query_params.get('company_id')
     if company_id:
         qs = qs.filter(company_id=company_id)
+
+    page = int(request.query_params.get('page', 1))
+    limit = int(request.query_params.get('limit', 10))
+    total = qs.count()
+    start = (page - 1) * limit
+    end = start + limit
+    qs = qs[start:end]
+
     serializer = InternshipSerializer(qs, many=True)
-    return Response(serializer.data)
+    return Response({
+        'count': total,
+        'page': page,
+        'limit': limit,
+        'total_pages': (total + limit - 1) // limit,
+        'results': serializer.data,
+    })
 
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
