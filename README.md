@@ -9,8 +9,8 @@ A Django REST Framework backend for managing internships, applications, and user
 - **Internship CRUD** — Companies can post, update, and delete internships with search, filter, and pagination
 - **Application management** — Students can apply to internships with resume upload (PDF, max 2MB); companies can review and update application status
 - **Rate limiting** — Custom IP-based rate limiter on the public listing endpoint (100 requests per 15 minutes)
-- **Duplicate prevention** — Database-level `unique_together` constraint plus application-level pre-check to prevent duplicate applications
-- **File uploads** — Resume upload with validation (PDF only, ≤ 2MB)
+- **Duplicate prevention** — Database-level unique_together constraint plus application-level pre-check to prevent duplicate applications
+- **File uploads** — Resume upload with validation (PDF only, 2MB max)
 
 ## Tech Stack
 
@@ -18,152 +18,14 @@ A Django REST Framework backend for managing internships, applications, and user
 |---|---|
 | Framework | Django 6.0.6 + Django REST Framework 3.17 |
 | Database | PostgreSQL |
-| Auth | JWT (djangorestframework-simplejwt) with bcrypt password hashing |
-| File Storage | Local media folder (media/) |
-| Environment | django-environ (.env file) |
+| Authentication | JWT (simplejwt) + bcrypt |
+| File Storage | Local media folder |
+| Environment | django-environ (.env) |
 
-## ERD Overview
+## Roles
 
-```
-User (AbstractUser)
-  ├── role: student | company | admin
-  ├── email (indexed)
-  │
-  ├── Company (OneToOne) ──→ Internship (FK)
-  │                              ├── title, description, requirements
-  │                              ├── location, duration, status
-  │                              └── created_at, updated_at
-  │
-  └── Application (FK) ──→ Internship (FK)
-       ├── cover_letter, resume (PDF only)
-       ├── status: pending | accepted | rejected
-       ├── applied_at, updated_at
-       └── unique_together: (student, internship)
-```
-
-## Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/abhikrishna-a/IQRAA.git
-cd IQRAA
-
-# Create and activate virtual environment
-python -m venv venv
-venv\Scripts\activate      # Windows
-# source venv/bin/activate # Linux/Mac
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your database credentials
-
-# Run migrations
-python manage.py migrate
-
-# Start development server
-python manage.py runserver
-```
-
-### Environment Variables (.env)
-
-```
-SECRET_KEY=your-django-secret-key
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-DB_NAME=iqraa
-DB_USER=postgres
-DB_PASSWORD=your-password
-DB_HOST=localhost
-DB_PORT=5432
-```
-
-## API Reference
-
-### Authentication
-
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| POST | /api/auth/register/ | Register a new user | None |
-| POST | /api/auth/login/ | Login, returns JWT access + refresh | None |
-| GET | /api/auth/profile/ | Get authenticated user's profile | JWT |
-| PUT | /api/auth/profile/ | Update profile (partial) | JWT |
-
-### Companies
-
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| GET | /api/companies/ | List all companies | None |
-| POST | /api/companies/ | Create a company profile | JWT |
-| GET | /api/companies/{id}/ | Company detail | None |
-| PUT | /api/companies/{id}/ | Update company (owner only) | JWT |
-| DELETE | /api/companies/{id}/ | Delete company (owner only) | JWT |
-
-### Internships
-
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| GET | /api/internships/ | List internships (paginated, rate-limited) | None |
-| POST | /api/internships/ | Create internship (company only) | JWT |
-| GET | /api/internships/{id}/ | Internship detail | None |
-| PUT | /api/internships/{id}/ | Full update (owner only) | JWT |
-| PATCH | /api/internships/{id}/ | Partial update (owner only) | JWT |
-| DELETE | /api/internships/{id}/ | Delete (owner only) | JWT |
-
-**Query parameters for GET /api/internships/:**
-- `search` — search title, description, requirements (icontains)
-- `status` — filter by open/closed
-- `location` — filter by location (case-insensitive)
-- `company_id` — filter by company
-- `page` — page number (default: 1)
-- `limit` — items per page (default: 10)
-
-### Applications
-
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| GET | /api/applications/ | List applications (role-based) | JWT |
-| POST | /api/applications/ | Apply for internship (student only) | JWT |
-| GET | /api/applications/{id}/ | Application detail (owner only) | JWT |
-| PUT | /api/applications/{id}/status/ | Update status (company owner only) | JWT |
-| PATCH | /api/applications/{id}/status/ | Update status (company owner only) | JWT |
-
-**Role-based listing behavior:**
-- **Student** — sees only their own applications
-- **Company** — sees applications for their internships
-- **Admin** — sees all applications
-
-## Testing
-
-```bash
-python manage.py test apps.internships.tests apps.applications.tests
-```
-
-### Test Coverage
-
-- Internship pagination (defaults, custom page/limit)
-- Rate limiting (429 after threshold)
-- Resume upload (PDF accepted, non-PDF rejected)
-- Application status update (invalid status → 400, student → 403, missing → 404)
-
-## Project Structure
-
-```
-IQRAA/
-├── IQRAA/
-│   ├── settings/
-│   │   ├── base.py          # Shared settings
-│   │   ├── dev.py           # Development settings
-│   │   └── prod.py          # Production settings
-│   ├── urls.py              # Root URL configuration
-│   └── wsgi.py              # WSGI entry point
-├── apps/
-│   ├── authentication/      # User model, register, login, profile
-│   ├── internships/         # Company, Internship models + CRUD
-│   └── applications/        # Application model + apply/list/status
-├── manage.py
-├── requirements.txt
-└── .env
-```
+| Role | Permissions |
+|---|---|
+| Student | Register, login, apply to internships, view own applications |
+| Company | Register, login, post/manage internships, review applications, update status |
+| Admin | Full access via Django admin panel |
