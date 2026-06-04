@@ -1,11 +1,8 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from django.urls import path
 
-from .views import ApplicationViewSet
-
-router = DefaultRouter()
-router.register(r'applications', ApplicationViewSet)
+from . import views
 
 urlpatterns = [
-    path('', include(router.urls)),
+    path('applications/', views.application_list, name='application-list'),
+    path('applications/<int:pk>/', views.application_detail, name='application-detail'),
 ]
