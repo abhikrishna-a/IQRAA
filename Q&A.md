@@ -1,9 +1,9 @@
 IQRAA Mark Pvt Ltd - Backend Developer Technical Assessment
 Sections C & D - Model Answers
 
-================================================================================
+
 SECTION C - Scalability & Problem Solving
-================================================================================
+
 
 Scenario: 1,000 internships go live. Within an hour, 50,000 students start applying.
 
@@ -35,9 +35,9 @@ Q7. How would you scale the system long-term?
 
 App servers: Horizontal scaling all the way. JWT is stateless so any instance handles any request. Containerize with Docker and orchestrate with Kubernetes. Database: Read replicas first. If the data crosses 100 million rows, consider sharding by company_id. File storage: Move media uploads (resumes, profile pics, logos) to S3 with CloudFront. Django shouldnt be serving files. Architecture: Keep it as a monolith until the team grows. Split into microservices for auth, internships, and applications only when the deployment cadence demands it. Monitoring: Prometheus with Grafana for metrics, Sentry for error tracking, structured JSON logs shipped to ELK or CloudWatch.
 
-================================================================================
+
 SECTION D - Query Optimization
-================================================================================
+
 
 The problem query: SELECT * FROM applications WHERE internship_id = 100 ORDER BY created_at DESC;
 Table size: Over 10 million rows.
@@ -64,4 +64,3 @@ Q4. How would you verify the improvement?
 
 EXPLAIN ANALYZE: Run it before and after adding the index. Look for Seq Scan (bad) changing to Index Only Scan (good). The row count should drop from millions to near zero. pg_stat_statements or pgBadger: Track slow query regressions in production. locust or k6: Simulate 50,000 concurrent users and measure p95 and p99 latency before and after adding the index. Django Debug Toolbar or Silk: Profile queries during development to catch problems early. APM tools like New Relic or Datadog: End-to-end traces showing exactly which database call is the bottleneck.
 
-End of Answer Sheet - Sections C & D
