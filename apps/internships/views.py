@@ -65,6 +65,21 @@ def company_detail(request, pk):
         serializer = CompanySerializer(company)
         return Response(serializer.data)
 
+    if not request.user.is_authenticated or request.user != company.user:
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'DELETE':
+        company.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = CompanySerializer(company, data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        serializer.save()
+    except IntegrityError:
+        return Response({'error': 'Cannot update company -- data conflict'}, status=status.HTTP_409_CONFLICT)
+    return Response(serializer.data)
+
     if request.method == 'DELETE':
         company.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

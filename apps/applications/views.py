@@ -70,17 +70,14 @@ def application_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def application_update_status(request, pk):
     try:
-        try:
-            application = Application.objects.select_related('internship__company', 'student').get(pk=pk)
-        except Application.DoesNotExist:
-            return Response({'error': 'Application not found'}, status=status.HTTP_404_NOT_FOUND)
+        application = Application.objects.select_related('internship__company', 'student').get(pk=pk)
+    except Application.DoesNotExist:
+        return Response({'error': 'Application not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.user.role != 'company' or application.internship.company.user != request.user:
-            return Response({'error': 'Only the internship owner can update status'}, status=status.HTTP_403_FORBIDDEN)
+    if request.user.role != 'company' or application.internship.company.user != request.user:
+        return Response({'error': 'Only the internship owner can update status'}, status=status.HTTP_403_FORBIDDEN)
 
-        serializer = StatusUpdateSerializer(application, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(ApplicationSerializer(application).data)
-    except Exception:
-        return Response({'error': 'Status update failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    serializer = StatusUpdateSerializer(application, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(ApplicationSerializer(application).data)

@@ -29,11 +29,12 @@ def register(request):
 @permission_classes([AllowAny])
 def login(request):
     serializer = LoginSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    try:
-        user = serializer.validated_data['user']
-    except KeyError:
-        return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    if not serializer.is_valid():
+        errors = serializer.errors.get('non_field_errors', [])
+        msg = str(errors[0]) if errors else 'Invalid credentials'
+        code = status.HTTP_401_UNAUTHORIZED if 'Invalid' in msg else status.HTTP_400_BAD_REQUEST
+        return Response({'error': msg}, status=code)
+    user = serializer.validated_data['user']
     refresh = RefreshToken.for_user(user)
     return Response({
         'access': str(refresh.access_token),

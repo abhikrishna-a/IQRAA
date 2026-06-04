@@ -7,6 +7,7 @@ class CompanySerializer(serializers.ModelSerializer):
     class Meta:
         model = Company
         fields = '__all__'
+        read_only_fields = ['user']
 
 
 class InternshipSerializer(serializers.ModelSerializer):
